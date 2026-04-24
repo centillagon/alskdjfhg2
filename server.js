@@ -4,33 +4,32 @@ import http from "http"
 const server = http.createServer()
 const wss = new WebSocketServer({ server })
 
-let messages = []
 let players = {}
+let ready = new Set()
 
 function broadcast(data) {
-  const str = JSON.stringify(data)
-  wss.clients.forEach(c => {
-    if (c.readyState === 1) c.send(str)
-  })
+  const s = JSON.stringify(data)
+  wss.clients.forEach(c => c.readyState === 1 && c.send(s))
+}
+
+function checkStart() {
+  const names = Object.keys(players)
+  if (names.length > 0 && names.every(n => ready.has(n))) {
+    ready.clear()
+    broadcast({ type: "raceStart" })
+  }
 }
 
 wss.on("connection", ws => {
+
   ws.on("message", msg => {
     let data
     try { data = JSON.parse(msg) } catch { return }
 
-    if (data.type === "chat") {
-      const m = {
-        id: Date.now() + Math.random(),
-        username: data.username,
-        message: data.message,
-        timestamp: new Date().toISOString()
-      }
-
-      messages.unshift(m)
-      if (messages.length > 100) messages.pop()
-
-      broadcast({ type: "chat", data: m })
+    if (data.type === "ready") {
+      if (data.ready) ready.add(data.username)
+      else ready.delete(data.username)
+      checkStart()
     }
 
     if (data.type === "game") {
@@ -42,24 +41,21 @@ wss.on("connection", ws => {
         color: data.color,
         lastSeen: Date.now()
       }
-
       broadcast({ type: "game", data: players[data.username] })
     }
   })
 
-  ws.send(JSON.stringify({
-    type: "init",
-    messages,
-    players: Object.values(players)
-  }))
+  ws.send(JSON.stringify({ type: "game", data: players }))
 })
 
 setInterval(() => {
   const now = Date.now()
-  for (const [name, p] of Object.entries(players)) {
-    if (now - p.lastSeen > 5000) delete players[name]
+  for (const [k,v] of Object.entries(players)) {
+    if (now - v.lastSeen > 5000) {
+      delete players[k]
+      ready.delete(k)
+    }
   }
 }, 2000)
 
-const PORT = process.env.PORT || 3000
-server.listen(PORT)
+server.listen(process.env.PORT || 3000)
